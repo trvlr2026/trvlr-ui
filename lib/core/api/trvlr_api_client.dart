@@ -111,21 +111,23 @@ class TrvlrApiClient {
 
     final data = jsonDecode(response.body) as Map<String, dynamic>;
     final rawList = (data['results'] as List? ?? []).cast<Map<String, dynamic>>();
-    final results = rawList
-        .map(
-          (v) => ApiVisit(
-            locationId: (v['location_id'] as num?)?.toInt() ?? 0,
-            placeName: v['place_name'] as String? ?? '',
-            district: v['district'] as String? ?? '',
-            locationType: v['location_type'] as String? ?? '',
-            lat: (v['lat'] as num).toDouble(),
-            lon: (v['lon'] as num).toDouble(),
-            photoId: v['photo_id'] as String? ?? '',
-            score: (v['score'] as num?)?.toInt() ?? 0,
-            visitedAt: v['visited_at'] != null ? DateTime.tryParse(v['visited_at'] as String) : null,
-          ),
-        )
-        .toList();
+    final results = rawList.map((v) {
+      final loc = v['location'] as Map<String, dynamic>;
+      return ApiVisit(
+        photoId: v['photo_id'] as String? ?? '',
+        score: (v['score'] as num?)?.toInt() ?? 0,
+        visitedAt: v['visited_at'] != null ? DateTime.tryParse(v['visited_at'] as String) : null,
+        location: ApiVisitLocation(
+          id: (loc['id'] as num?)?.toInt() ?? 0,
+          lat: (loc['lat'] as num).toDouble(),
+          lon: (loc['lon'] as num).toDouble(),
+          placeName: loc['place_name'] as String? ?? '',
+          district: loc['district'] as String? ?? '',
+          locationType: loc['location_type'] as String? ?? '',
+          score: (loc['score'] as num?)?.toInt() ?? 0,
+        ),
+      );
+    }).toList();
 
     return ApiVisitsPage(
       results: results,

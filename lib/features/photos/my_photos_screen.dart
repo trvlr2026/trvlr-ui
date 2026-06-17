@@ -218,8 +218,10 @@ class _MyPhotosScreenState extends ConsumerState<MyPhotosScreen> {
     final visited = <GeoTaggedPhoto>[];
     final unknown = <GeoTaggedPhoto>[];
 
-    // Build a set of visited photo_ids for O(1) lookup
-    final visitedPhotoIds = isOnline ? visitedEntries.map((v) => v.photoId).toSet() : const <String>{};
+    // Map photo_id → visit so Visited photos can be enriched with location name
+    final visitMap = isOnline
+        ? {for (final v in visitedEntries) v.photoId: v}
+        : const <String, ApiVisit>{};
 
     for (final photo in result.photos) {
       if (!photo.hasLocation) {
@@ -227,10 +229,21 @@ class _MyPhotosScreenState extends ConsumerState<MyPhotosScreen> {
         continue;
       }
 
-      if (isOnline && visitedPhotoIds.isNotEmpty) {
+      if (isOnline && visitMap.isNotEmpty) {
         final id = generatePhotoId(photo.latitude!, photo.longitude!, photo.takenAt);
-        if (visitedPhotoIds.contains(id)) {
-          visited.add(photo);
+        final visit = visitMap[id];
+        if (visit != null) {
+          visited.add(GeoTaggedPhoto(
+            assetId: photo.assetId,
+            latitude: photo.latitude,
+            longitude: photo.longitude,
+            takenAt: photo.takenAt,
+            placeName: visit.location.placeName,
+            district: visit.location.district,
+            state: photo.state,
+            earnedScore: visit.score,
+            locationType: visit.location.locationType,
+          ));
         } else {
           unknown.add(photo);
         }
@@ -666,6 +679,7 @@ class _PhotoRow extends StatelessWidget {
     final hasPlace = photo.hasMatchedPlace;
     final hasLocation = photo.hasLocation;
     final dateLabel = photo.takenAt != null ? DateFormat.yMMMd().format(photo.takenAt!) : null;
+    final typeTags = _locationTags(photo.locationType);
 
     return Card(
       child: Padding(
@@ -690,30 +704,91 @@ class _PhotoRow extends StatelessWidget {
                   ),
                   if (hasPlace && photo.district != null) ...[
                     const SizedBox(height: 4),
-                    Text('${photo.district}, ${photo.state}', style: const TextStyle(color: AppColors.textSecondary)),
-                  ],
-                  if (photo.coordinatesLabel != null) ...[
-                    const SizedBox(height: 4),
-                    Text(photo.coordinatesLabel!, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                    Text(
+                      photo.state != null
+                          ? '${photo.district}, ${photo.state}'
+                          : '${photo.district}',
+                      style: const TextStyle(color: AppColors.textSecondary),
+                    ),
                   ],
                   if (!hasLocation) ...[
                     const SizedBox(height: 4),
-                    const Text('No GPS in photo metadata', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                    const Text('No GPS in photo metadata',
+                        style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
                   ] else if (!hasPlace) ...[
                     const SizedBox(height: 4),
-                    const Text('No matching place', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                    const Text('No matching place',
+                        style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
                   ],
                   if (dateLabel != null) ...[
                     const SizedBox(height: 4),
-                    Text(dateLabel, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                    Text(dateLabel,
+                        style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                  ],
+                  if (typeTags.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      children: typeTags.map((t) => _Tag(label: t)).toList(),
+                    ),
                   ],
                 ],
               ),
             ),
             const SizedBox(width: 12),
-            _PhotoThumbnail(assetId: photo.assetId),
+            // thumbnail + score stacked, 88 px wide
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _PhotoThumbnail(assetId: photo.assetId),
+                if (photo.earnedScore != null) ...[
+                  const SizedBox(height: 6),
+                  SizedBox(
+                    width: 88,
+                    child: _Tag(
+                      label: '+${photo.earnedScore} pts',
+                      color: AppColors.primary,
+                      centered: true,
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// "tourism:hostel" → ["tourism", "hostel"],  "park" → ["park"]
+  static List<String> _locationTags(String? raw) {
+    if (raw == null || raw.isEmpty) return [];
+    return raw.split(':').map((s) => s.replaceAll('_', ' ')).toList();
+  }
+}
+
+class _Tag extends StatelessWidget {
+  const _Tag({required this.label, this.color = AppColors.textSecondary, this.centered = false});
+
+  final String label;
+  final Color color;
+  final bool centered;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: centered ? double.infinity : null,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withAlpha(25),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withAlpha(80)),
+      ),
+      child: Text(
+        label,
+        textAlign: centered ? TextAlign.center : TextAlign.start,
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color),
       ),
     );
   }

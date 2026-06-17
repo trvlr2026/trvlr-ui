@@ -7,6 +7,8 @@ class GeoTaggedPhoto {
     this.placeName,
     this.district,
     this.state,
+    this.earnedScore,
+    this.locationType,
   });
 
   final String assetId;
@@ -16,6 +18,8 @@ class GeoTaggedPhoto {
   final String? placeName;
   final String? district;
   final String? state;
+  final int? earnedScore;
+  final String? locationType;
 
   bool get hasLocation => latitude != null && longitude != null;
 
