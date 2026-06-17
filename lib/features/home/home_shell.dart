@@ -6,6 +6,7 @@ import '../leaderboards/leaderboard_screen.dart';
 import '../map/map_screen.dart';
 import '../photos/my_photos_screen.dart';
 import '../profile/profile_screen.dart';
+import '../spots/spots_screen.dart';
 
 class HomeShell extends ConsumerStatefulWidget {
   const HomeShell({super.key});
@@ -20,6 +21,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   static const _tabs = [
     (icon: Icons.map_rounded, label: 'Map'),
     (icon: Icons.photo_library_rounded, label: 'My Photos'),
+    (icon: Icons.explore_rounded, label: 'Spots'),
     (icon: Icons.leaderboard_rounded, label: 'Ranks'),
     (icon: Icons.person_rounded, label: 'Profile'),
   ];
@@ -33,7 +35,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
         children: [
           IndexedStack(
             index: _index,
-            children: const [MapScreen(), MyPhotosScreen(), LeaderboardScreen(), ProfileScreen()],
+            children: const [MapScreen(), MyPhotosScreen(), SpotsScreen(), LeaderboardScreen(), ProfileScreen()],
           ),
           SafeArea(
             child: Align(

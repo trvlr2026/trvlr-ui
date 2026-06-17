@@ -10,6 +10,7 @@ import '../core/permissions/permission_service.dart';
 import '../core/photos/photo_scanner_service.dart';
 import '../data/models/api_visit.dart';
 import '../data/models/geo_tagged_photo.dart';
+import '../data/models/places_tree.dart';
 import '../data/models/leaderboard_entry.dart';
 import '../data/models/place.dart';
 import '../data/models/user.dart';
@@ -124,6 +125,26 @@ final allVisitedPlacesProvider = FutureProvider<List<ApiVisit>>((ref) async {
   }
 
   return all;
+});
+
+final placesTreeProvider = FutureProvider<PlacesTree>((ref) async {
+  return TrvlrApiClient().getPlacesTree();
+});
+
+class SpotsFilterParams {
+  const SpotsFilterParams({required this.state, required this.district});
+  final String state;
+  final String district;
+
+  @override
+  bool operator ==(Object other) =>
+      other is SpotsFilterParams && other.state == state && other.district == district;
+  @override
+  int get hashCode => Object.hash(state, district);
+}
+
+final spotsByFilterProvider = FutureProvider.family<List<Place>, SpotsFilterParams>((ref, params) async {
+  return TrvlrApiClient().getSpotsByFilter(state: params.state, district: params.district);
 });
 
 final leaderboardProvider = FutureProvider.family<List<LeaderboardEntry>, LeaderboardParams>((ref, params) async {

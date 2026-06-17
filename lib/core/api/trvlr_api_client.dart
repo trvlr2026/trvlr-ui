@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import '../../data/models/api_visit.dart';
 import '../../data/models/bulk_checkin.dart';
 import '../../data/models/place.dart';
+import '../../data/models/places_tree.dart';
 import 'api_config.dart';
 
 class TrvlrApiClient {
@@ -133,6 +134,78 @@ class TrvlrApiClient {
       results: results,
       page: (data['page'] as num?)?.toInt() ?? page,
       pageSize: (data['page_size'] as num?)?.toInt() ?? pageSize,
+    );
+  }
+
+  Future<PlacesTree> getPlacesTree() async {
+    final uri = Uri.parse('${ApiConfig.baseUrl}/places-tree');
+    final response = await http.get(uri).timeout(const Duration(seconds: 10));
+
+    if (response.statusCode != 200) {
+      throw Exception('getPlacesTree failed: ${response.statusCode}');
+    }
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    final states = (data['states'] as List)
+        .cast<Map<String, dynamic>>()
+        .map(
+          (s) => StateNode(
+            state: s['state'] as String,
+            districts: (s['districts'] as List).cast<String>(),
+          ),
+        )
+        .toList();
+
+    return PlacesTree(states: states);
+  }
+
+  Future<List<Place>> getSpotsByFilter({
+    required String state,
+    required String district,
+    int pageSize = 50,
+  }) async {
+    final all = <Place>[];
+    var page = 1;
+
+    while (true) {
+      final uri = Uri.parse('${ApiConfig.baseUrl}/locations/').replace(
+        queryParameters: {
+          'district': district,
+          'page': page.toString(),
+          'page_size': pageSize.toString(),
+        },
+      );
+
+      final response = await http.get(uri).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode != 200) {
+        throw Exception('getSpotsByFilter failed: ${response.statusCode}');
+      }
+
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final results = (data['results'] as List? ?? []).cast<Map<String, dynamic>>();
+      all.addAll(results.map(_placeFromLocationsJson));
+
+      if (results.length < pageSize) break;
+      page++;
+    }
+
+    return all;
+  }
+
+  static Place _placeFromLocationsJson(Map<String, dynamic> json) {
+    final locationType = json['location_type'] as String? ?? '';
+    return Place(
+      id: json['id'].toString(),
+      name: json['place_name'] as String? ?? '',
+      latitude: (json['latitude'] as num).toDouble(),
+      longitude: (json['longitude'] as num).toDouble(),
+      district: json['district'] as String? ?? '',
+      state: json['state'] as String? ?? '',
+      country: 'India',
+      pointsValue: (json['score'] as num?)?.toInt() ?? 0,
+      radiusM: _defaultRadius(locationType),
+      category: locationType,
     );
   }
 
