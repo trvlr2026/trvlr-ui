@@ -1,25 +1,31 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/api/api_config.dart';
 import '../core/api/health_service.dart';
+import '../core/api/trvlr_api_client.dart';
 import '../core/geo/geofence.dart';
 import '../core/location/location_service.dart';
 import '../core/permissions/permission_service.dart';
 import '../core/photos/photo_scanner_service.dart';
+import '../data/models/api_visit.dart';
 import '../data/models/geo_tagged_photo.dart';
 import '../data/models/leaderboard_entry.dart';
 import '../data/models/place.dart';
 import '../data/models/user.dart';
 import '../data/models/visit.dart';
-import '../data/repositories/mock_trvlr_repository.dart';
 import '../data/repositories/trvlr_repository.dart';
+import '../data/repositories/trvlr_repository_offline.dart';
+import '../data/repositories/trvlr_repository_online.dart';
 
 final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
   throw UnimplementedError('SharedPreferences must be overridden in main');
 });
 
 final repositoryProvider = Provider<TrvlrRepository>((ref) {
-  return MockTrvlrRepository(ref.watch(sharedPreferencesProvider));
+  final prefs = ref.watch(sharedPreferencesProvider);
+  final isOnline = ref.watch(backendStatusProvider).valueOrNull ?? false;
+  return isOnline ? TrvlrRepositoryOnline(prefs) : TrvlrRepositoryOffline(prefs);
 });
 
 final locationServiceProvider = Provider((_) => LocationService());
@@ -48,7 +54,11 @@ final userStatsProvider = FutureProvider<UserStats>((ref) async {
 });
 
 final placesProvider = FutureProvider<List<Place>>((ref) async {
-  return ref.watch(repositoryProvider).getAllPlaces();
+  final position = await ref.read(locationServiceProvider).getCurrentPosition();
+  return ref.read(repositoryProvider).getAllPlaces(
+    lat: position?.latitude,
+    lon: position?.longitude,
+  );
 });
 
 final myPhotosScanProgressProvider = StateProvider<(int, int)?>((ref) => null);
@@ -87,6 +97,33 @@ final myPhotosProvider = FutureProvider<GalleryScanResult>((ref) async {
     photos: enriched,
     permissionDenied: result.permissionDenied,
   );
+});
+
+/// Fetches all visited entries from the backend (all pages) when online.
+/// Returns an empty list when offline.
+/// Each [ApiVisit] carries a [photoId] used for exact-match categorisation.
+final allVisitedPlacesProvider = FutureProvider<List<ApiVisit>>((ref) async {
+  final isOnline = ref.watch(backendStatusProvider).valueOrNull ?? false;
+  if (!isOnline) return [];
+
+  final api = TrvlrApiClient();
+  const pageSize = 100;
+  final all = <ApiVisit>[];
+  var page = 1;
+
+  while (true) {
+    final response = await api.getVisits(
+      userId: ApiConfig.userId,
+      page: page,
+      pageSize: pageSize,
+    );
+    all.addAll(response.results);
+    // stop when we received fewer items than the page size — last page reached
+    if (response.results.length < pageSize) break;
+    page++;
+  }
+
+  return all;
 });
 
 final leaderboardProvider = FutureProvider.family<List<LeaderboardEntry>, LeaderboardParams>((ref, params) async {

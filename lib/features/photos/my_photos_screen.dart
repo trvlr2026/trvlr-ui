@@ -7,15 +7,86 @@ import 'package:photo_manager/photo_manager.dart';
 
 import '../../core/permissions/permission_service.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/utils/photo_id.dart';
+import '../../data/models/api_visit.dart';
+import '../../data/models/bulk_checkin.dart';
 import '../../data/models/geo_tagged_photo.dart';
 import '../../providers/providers.dart';
 
-class MyPhotosScreen extends ConsumerWidget {
+class MyPhotosScreen extends ConsumerStatefulWidget {
   const MyPhotosScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<MyPhotosScreen> createState() => _MyPhotosScreenState();
+}
+
+class _MyPhotosScreenState extends ConsumerState<MyPhotosScreen> {
+  var _checkingIn = false;
+
+  Future<void> _bulkCheckIn(GalleryScanResult result) async {
+    setState(() => _checkingIn = true);
+
+    final coords = result.photos
+        .where((p) => p.hasLocation)
+        .map((p) => (
+              lat: p.latitude!,
+              lon: p.longitude!,
+              photoId: generatePhotoId(p.latitude!, p.longitude!, p.takenAt),
+            ))
+        .toList();
+
+    final totalPhotos = result.totalPhotos;
+    final missingCoords = totalPhotos - result.geotaggedCount;
+
+    try {
+      final checkInResult = await ref.read(repositoryProvider).bulkCheckIn(coords);
+      if (!mounted) return;
+
+      // refresh stats + visits + categorized photos after earning new points
+      ref.invalidate(visitsProvider);
+      ref.invalidate(userStatsProvider);
+      ref.invalidate(allVisitedPlacesProvider);
+
+      _showResultSheet(
+        totalPhotos: totalPhotos,
+        missingCoords: missingCoords,
+        considered: coords.length,
+        checkInResult: checkInResult,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Check-in failed: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _checkingIn = false);
+    }
+  }
+
+  void _showResultSheet({
+    required int totalPhotos,
+    required int missingCoords,
+    required int considered,
+    required BulkCheckInResult checkInResult,
+  }) {
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) => _BulkCheckInResultSheet(
+        totalPhotos: totalPhotos,
+        missingCoords: missingCoords,
+        considered: considered,
+        checkInResult: checkInResult,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final scanAsync = ref.watch(myPhotosProvider);
+    final isOnline = ref.watch(backendStatusProvider).valueOrNull ?? false;
+    final visitedPlacesAsync = ref.watch(allVisitedPlacesProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -24,10 +95,26 @@ class MyPhotosScreen extends ConsumerWidget {
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Rescan gallery',
-            onPressed: () => ref.invalidate(myPhotosProvider),
+            onPressed: () {
+              ref.invalidate(myPhotosProvider);
+              ref.invalidate(allVisitedPlacesProvider);
+            },
           ),
         ],
       ),
+      floatingActionButton: (isOnline && scanAsync.value != null && !scanAsync.value!.permissionDenied && scanAsync.value!.geotaggedCount > 0)
+          ? FloatingActionButton.extended(
+              onPressed: _checkingIn ? null : () => _bulkCheckIn(scanAsync.value!),
+              icon: _checkingIn
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Icon(Icons.where_to_vote_rounded),
+              label: Text(_checkingIn ? 'Checking in...' : 'Bulk check-in'),
+            )
+          : null,
       body: scanAsync.when(
         loading: () => const _LoadingView(),
         error: (e, _) => Center(
@@ -59,16 +146,60 @@ class MyPhotosScreen extends ConsumerWidget {
           if (result.photos.isEmpty) {
             return _EmptyView(totalPhotos: result.totalPhotos);
           }
+
+          final visitedPlaces = visitedPlacesAsync.valueOrNull ?? [];
+          final sections = _categorize(result, visitedPlaces, isOnline);
+
+          // Build flat list: section headers + photo items interleaved
+          final items = <Object>[];
+          if (sections.visited.isNotEmpty) {
+            items.add(_SectionMeta(
+              title: 'Visited',
+              icon: Icons.check_circle_rounded,
+              color: AppColors.primary,
+              count: sections.visited.length,
+            ));
+            items.addAll(sections.visited);
+          }
+          if (sections.unknown.isNotEmpty) {
+            items.add(_SectionMeta(
+              title: 'Unknown',
+              icon: Icons.help_outline_rounded,
+              color: Colors.amber.shade700,
+              count: sections.unknown.length,
+            ));
+            items.addAll(sections.unknown);
+          }
+          if (sections.noGps.isNotEmpty) {
+            items.add(_SectionMeta(
+              title: 'No GPS',
+              icon: Icons.location_off_rounded,
+              color: AppColors.textSecondary,
+              count: sections.noGps.length,
+            ));
+            items.addAll(sections.noGps);
+          }
+
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _StatsBanner(result: result),
+              _StatsBanner(result: result, isOnline: isOnline, visitedCount: sections.visited.length),
+              if (isOnline && visitedPlacesAsync.isLoading)
+                const LinearProgressIndicator(minHeight: 2),
               Expanded(
-                child: ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                  itemCount: result.photos.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 10),
-                  itemBuilder: (context, index) => _PhotoRow(photo: result.photos[index]),
+                child: ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+                  itemCount: items.length,
+                  itemBuilder: (context, index) {
+                    final item = items[index];
+                    if (item is _SectionMeta) {
+                      return _SectionHeader(meta: item);
+                    }
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: _PhotoRow(photo: item as GeoTaggedPhoto),
+                    );
+                  },
                 ),
               ),
             ],
@@ -77,12 +208,245 @@ class MyPhotosScreen extends ConsumerWidget {
       ),
     );
   }
+
+  ({List<GeoTaggedPhoto> visited, List<GeoTaggedPhoto> unknown, List<GeoTaggedPhoto> noGps}) _categorize(
+    GalleryScanResult result,
+    List<ApiVisit> visitedEntries,
+    bool isOnline,
+  ) {
+    final noGps = <GeoTaggedPhoto>[];
+    final visited = <GeoTaggedPhoto>[];
+    final unknown = <GeoTaggedPhoto>[];
+
+    // Build a set of visited photo_ids for O(1) lookup
+    final visitedPhotoIds = isOnline ? visitedEntries.map((v) => v.photoId).toSet() : const <String>{};
+
+    for (final photo in result.photos) {
+      if (!photo.hasLocation) {
+        noGps.add(photo);
+        continue;
+      }
+
+      if (isOnline && visitedPhotoIds.isNotEmpty) {
+        final id = generatePhotoId(photo.latitude!, photo.longitude!, photo.takenAt);
+        if (visitedPhotoIds.contains(id)) {
+          visited.add(photo);
+        } else {
+          unknown.add(photo);
+        }
+      } else {
+        unknown.add(photo);
+      }
+    }
+
+    return (visited: visited, unknown: unknown, noGps: noGps);
+  }
 }
 
+// ── Result bottom sheet ──────────────────────────────────────────────────────
+
+class _BulkCheckInResultSheet extends StatelessWidget {
+  const _BulkCheckInResultSheet({
+    required this.totalPhotos,
+    required this.missingCoords,
+    required this.considered,
+    required this.checkInResult,
+  });
+
+  final int totalPhotos;
+  final int missingCoords;
+  final int considered;
+  final BulkCheckInResult checkInResult;
+
+  @override
+  Widget build(BuildContext context) {
+    final earned = checkInResult.totalEarned;
+    final newPlaces = checkInResult.newPlacesCount;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 0, 24, 32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Icon(
+              earned > 0 ? Icons.celebration_rounded : Icons.where_to_vote_rounded,
+              size: 56,
+              color: AppColors.primary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Center(
+            child: Text(
+              earned > 0 ? 'Check-in complete!' : 'Nothing new this time',
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+            ),
+          ),
+          const SizedBox(height: 24),
+          _ResultRow(
+            icon: Icons.photo_library_outlined,
+            label: 'Total photos scanned',
+            value: '$totalPhotos',
+          ),
+          _ResultRow(
+            icon: Icons.location_off_outlined,
+            label: 'Missing GPS (skipped)',
+            value: '$missingCoords',
+            valueColor: missingCoords > 0 ? AppColors.textSecondary : null,
+          ),
+          _ResultRow(
+            icon: Icons.my_location_rounded,
+            label: 'Locations sent to backend',
+            value: '$considered',
+          ),
+          const Divider(height: 28),
+          _ResultRow(
+            icon: Icons.place_rounded,
+            label: 'New places discovered',
+            value: '$newPlaces',
+            valueColor: newPlaces > 0 ? AppColors.primary : null,
+          ),
+          _ResultRow(
+            icon: Icons.star_rounded,
+            label: 'Points earned',
+            value: '+$earned',
+            valueColor: earned > 0 ? AppColors.primary : AppColors.textSecondary,
+            bold: true,
+          ),
+          const SizedBox(height: 24),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Done'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ResultRow extends StatelessWidget {
+  const _ResultRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.valueColor,
+    this.bold = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color? valueColor;
+  final bool bold;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: AppColors.textSecondary),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(label, style: const TextStyle(color: AppColors.textSecondary)),
+          ),
+          Text(
+            value,
+            style: TextStyle(
+              fontWeight: bold ? FontWeight.bold : FontWeight.w600,
+              fontSize: bold ? 18 : 14,
+              color: valueColor ?? AppColors.textPrimary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Section metadata + header ─────────────────────────────────────────────────
+
+class _SectionMeta {
+  const _SectionMeta({
+    required this.title,
+    required this.icon,
+    required this.color,
+    required this.count,
+  });
+
+  final String title;
+  final IconData icon;
+  final Color color;
+  final int count;
+}
+
+class _SectionHeader extends StatelessWidget {
+  const _SectionHeader({required this.meta});
+
+  final _SectionMeta meta;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, bottom: 6),
+      child: Row(
+        children: [
+          Container(
+            width: 4,
+            height: 28,
+            decoration: BoxDecoration(
+              color: meta.color,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Icon(meta.icon, size: 18, color: meta.color),
+          const SizedBox(width: 6),
+          Text(
+            meta.title,
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: meta.color,
+                ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: meta.color.withAlpha(30),
+              borderRadius: BorderRadius.circular(12),
+            ),
+          child: Text(
+              '${meta.count}',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: meta.color,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Stats banner ──────────────────────────────────────────────────────────────
+
 class _StatsBanner extends StatelessWidget {
-  const _StatsBanner({required this.result});
+  const _StatsBanner({
+    required this.result,
+    required this.isOnline,
+    required this.visitedCount,
+  });
 
   final GalleryScanResult result;
+  final bool isOnline;
+  final int visitedCount;
 
   @override
   Widget build(BuildContext context) {
@@ -92,11 +456,25 @@ class _StatsBanner extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         child: Row(
           children: [
-            Expanded(child: _StatItem(label: 'Total photos', value: '${result.totalPhotos}')),
+            Expanded(child: _StatItem(label: 'Total', value: '${result.totalPhotos}')),
             Container(width: 1, height: 36, color: Colors.grey.shade300),
-            Expanded(child: _StatItem(label: 'With location', value: '${result.geotaggedCount}')),
+            Expanded(child: _StatItem(label: 'With GPS', value: '${result.geotaggedCount}')),
             Container(width: 1, height: 36, color: Colors.grey.shade300),
-            Expanded(child: _StatItem(label: 'Matched places', value: '${result.matchedPlacesCount}')),
+            if (isOnline)
+              Expanded(
+                child: _StatItem(
+                  label: 'Visited',
+                  value: '$visitedCount',
+                  valueColor: AppColors.primary,
+                ),
+              )
+            else
+              Expanded(
+                child: _StatItem(
+                  label: 'Matched',
+                  value: '${result.matchedPlacesCount}',
+                ),
+              ),
           ],
         ),
       ),
@@ -105,16 +483,20 @@ class _StatsBanner extends StatelessWidget {
 }
 
 class _StatItem extends StatelessWidget {
-  const _StatItem({required this.label, required this.value});
+  const _StatItem({required this.label, required this.value, this.valueColor});
 
   final String label;
   final String value;
+  final Color? valueColor;
 
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Text(value, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: AppColors.primary)),
+        Text(
+          value,
+          style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: valueColor ?? AppColors.primary),
+        ),
         const SizedBox(height: 2),
         Text(label, textAlign: TextAlign.center, style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
       ],

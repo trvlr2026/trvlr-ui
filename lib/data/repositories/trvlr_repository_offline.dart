@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/geo/geofence.dart';
 import '../dummy/places.dart';
+import '../models/bulk_checkin.dart';
 import '../dummy/users.dart';
 import '../models/leaderboard_entry.dart';
 import '../models/place.dart';
@@ -11,8 +12,8 @@ import '../models/user.dart';
 import '../models/visit.dart';
 import 'trvlr_repository.dart';
 
-class MockTrvlrRepository implements TrvlrRepository {
-  MockTrvlrRepository(this._prefs);
+class TrvlrRepositoryOffline implements TrvlrRepository {
+  TrvlrRepositoryOffline(this._prefs);
 
   final SharedPreferences _prefs;
   static const _userKey = 'current_user';
@@ -59,11 +60,14 @@ class MockTrvlrRepository implements TrvlrRepository {
   }
 
   @override
-  Future<List<Place>> getAllPlaces() async => dummyPlaces;
+  Future<List<Place>> getAllPlaces({double? lat, double? lon, double radiusM = 5000}) async =>
+      dummyPlaces;
 
   @override
   Future<List<Place>> getNearbyPlaces(double lat, double lng, {double radiusKm = 50}) async {
-    return dummyPlaces.where((p) => distanceBetweenM(lat, lng, p.latitude, p.longitude) <= radiusKm * 1000).toList();
+    return dummyPlaces
+        .where((p) => distanceBetweenM(lat, lng, p.latitude, p.longitude) <= radiusKm * 1000)
+        .toList();
   }
 
   @override
@@ -93,7 +97,9 @@ class MockTrvlrRepository implements TrvlrRepository {
   @override
   Future<ImportResult> importPhotoVisits(List<PhotoCoord> coords) async {
     final visited = await getVisitedPlaceIds();
-    final clusters = clusterCoords(coords.map((c) => PhotoCoordInput(latitude: c.latitude, longitude: c.longitude, takenAt: c.takenAt)).toList());
+    final clusters = clusterCoords(
+      coords.map((c) => PhotoCoordInput(latitude: c.latitude, longitude: c.longitude, takenAt: c.takenAt)).toList(),
+    );
     final newVisits = <Visit>[];
 
     for (final cluster in clusters) {
@@ -127,7 +133,9 @@ class MockTrvlrRepository implements TrvlrRepository {
   @override
   Future<List<Visit>> getMyVisits() async {
     final raw = _prefs.getStringList(_visitsKey) ?? [];
-    return raw.map((e) => Visit.fromJson(jsonDecode(e) as Map<String, dynamic>)).toList()
+    return raw
+        .map((e) => Visit.fromJson(jsonDecode(e) as Map<String, dynamic>))
+        .toList()
       ..sort((a, b) => b.visitedAt.compareTo(a.visitedAt));
   }
 
@@ -198,6 +206,11 @@ class MockTrvlrRepository implements TrvlrRepository {
     return dummyPlaces.map((p) => p.state).toSet().toList()..sort();
   }
 
+  @override
+  Future<BulkCheckInResult> bulkCheckIn(List<({double lat, double lon, String photoId})> coordinates) {
+    throw UnsupportedError('bulkCheckIn is not available in offline mode.');
+  }
+
   Future<void> _saveUser(User user) async {
     _cachedUser = user;
     await _prefs.setString(_userKey, jsonEncode(user.toJson()));
@@ -211,7 +224,8 @@ class MockTrvlrRepository implements TrvlrRepository {
 }
 
 extension on User {
-  User copyWith({String? id, String? displayName, String? email, String? homeDistrict, String? homeState}) => User(
+  User copyWith({String? id, String? displayName, String? email, String? homeDistrict, String? homeState}) =>
+      User(
         id: id ?? this.id,
         displayName: displayName ?? this.displayName,
         email: email ?? this.email,
