@@ -6,8 +6,8 @@ import '../../data/models/leaderboard_entry.dart';
 import '../permissions/permission_service.dart';
 
 class PhotoScannerService {
-  static const maxPhotos = 2000;
-  static const batchSize = 40;
+  static const maxPhotos = 50;
+  static const batchSize = 50;
 
   Future<List<PhotoCoord>> scanGallery({void Function(int scanned, int total)? onProgress}) async {
     final result = await scanGalleryAll(onProgress: onProgress);

@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/api/health_service.dart';
 import '../core/geo/geofence.dart';
 import '../core/location/location_service.dart';
 import '../core/permissions/permission_service.dart';
@@ -24,6 +25,11 @@ final repositoryProvider = Provider<TrvlrRepository>((ref) {
 final locationServiceProvider = Provider((_) => LocationService());
 final permissionServiceProvider = Provider((_) => PermissionService());
 final photoScannerProvider = Provider((_) => PhotoScannerService());
+final healthServiceProvider = Provider((_) => HealthService());
+
+final backendStatusProvider = StreamProvider<bool>((ref) {
+  return ref.watch(healthServiceProvider).healthStream();
+});
 
 final currentUserProvider = FutureProvider<User?>((ref) async {
   return ref.watch(repositoryProvider).getCurrentUser();
