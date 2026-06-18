@@ -10,9 +10,11 @@ import '../../data/models/places_tree.dart';
 import 'api_config.dart';
 
 class TrvlrApiClient {
-  TrvlrApiClient({this.token});
+  TrvlrApiClient({this.token, String? baseUrl})
+      : _baseUrl = baseUrl ?? ApiConfig.baseUrl;
 
   final String? token;
+  final String _baseUrl;
 
   Map<String, String> get _headers => {
         'Content-Type': 'application/json',
@@ -25,7 +27,7 @@ class TrvlrApiClient {
     required double lon,
     double radiusM = 5000,
   }) async {
-    final uri = Uri.parse('${ApiConfig.baseUrl}/nearby/').replace(
+    final uri = Uri.parse('$_baseUrl/nearby/').replace(
       queryParameters: {
         'user_id': userId,
         'lat': lat.toString(),
@@ -64,7 +66,7 @@ class TrvlrApiClient {
     required String userId,
     required List<({double lat, double lon, String photoId})> coordinates,
   }) async {
-    final uri = Uri.parse('${ApiConfig.baseUrl}/checkin/');
+    final uri = Uri.parse('$_baseUrl/checkin/');
     final response = await http
         .post(
           uri,
@@ -105,7 +107,7 @@ class TrvlrApiClient {
     int page = 1,
     int pageSize = 100,
   }) async {
-    final uri = Uri.parse('${ApiConfig.baseUrl}/$userId/visits').replace(
+    final uri = Uri.parse('$_baseUrl/$userId/visits').replace(
       queryParameters: {
         'page': page.toString(),
         'page_size': pageSize.toString(),
@@ -148,7 +150,7 @@ class TrvlrApiClient {
   Future<({UserStats stats, String email, String displayName})> getProfile({
     required String userId,
   }) async {
-    final uri = Uri.parse('${ApiConfig.baseUrl}/profile/$userId');
+    final uri = Uri.parse('$_baseUrl/profile/$userId');
     final response = await http.get(uri, headers: _headers).timeout(const Duration(seconds: 10));
 
     if (response.statusCode != 200) {
@@ -174,7 +176,7 @@ class TrvlrApiClient {
   }
 
   Future<PlacesTree> getPlacesTree() async {
-    final uri = Uri.parse('${ApiConfig.baseUrl}/places-tree');
+    final uri = Uri.parse('$_baseUrl/places-tree');
     final response = await http.get(uri, headers: _headers).timeout(const Duration(seconds: 10));
 
     if (response.statusCode != 200) {
@@ -195,38 +197,31 @@ class TrvlrApiClient {
     return PlacesTree(states: states);
   }
 
+  /// Fetches a single page of spots. Returns the list for that page;
+  /// caller decides whether more pages exist (length == pageSize).
   Future<List<Place>> getSpotsByFilter({
     required String state,
     required String district,
+    int page = 1,
     int pageSize = 50,
   }) async {
-    final all = <Place>[];
-    var page = 1;
+    final uri = Uri.parse('$_baseUrl/locations/').replace(
+      queryParameters: {
+        'district': district,
+        'page': page.toString(),
+        'page_size': pageSize.toString(),
+      },
+    );
 
-    while (true) {
-      final uri = Uri.parse('${ApiConfig.baseUrl}/locations/').replace(
-        queryParameters: {
-          'district': district,
-          'page': page.toString(),
-          'page_size': pageSize.toString(),
-        },
-      );
+    final response = await http.get(uri, headers: _headers).timeout(const Duration(seconds: 10));
 
-      final response = await http.get(uri, headers: _headers).timeout(const Duration(seconds: 10));
-
-      if (response.statusCode != 200) {
-        throw Exception('getSpotsByFilter failed: ${response.statusCode}');
-      }
-
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
-      final results = (data['results'] as List? ?? []).cast<Map<String, dynamic>>();
-      all.addAll(results.map(_placeFromLocationsJson));
-
-      if (results.length < pageSize) break;
-      page++;
+    if (response.statusCode != 200) {
+      throw Exception('getSpotsByFilter failed: ${response.statusCode}');
     }
 
-    return all;
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    final results = (data['results'] as List? ?? []).cast<Map<String, dynamic>>();
+    return results.map(_placeFromLocationsJson).toList();
   }
 
   static Place _placeFromLocationsJson(Map<String, dynamic> json) {
@@ -254,7 +249,7 @@ class TrvlrApiClient {
     var page = 1;
 
     while (true) {
-      final uri = Uri.parse('${ApiConfig.baseUrl}/leaderboard/').replace(
+      final uri = Uri.parse('$_baseUrl/leaderboard/').replace(
         queryParameters: {
           'page': page.toString(),
           'page_size': pageSize.toString(),
@@ -275,6 +270,7 @@ class TrvlrApiClient {
         results.map(
           (r) => ApiLeaderboardEntry(
             userId: r['user_id'] as String,
+            userName: r['user_name'] as String? ?? r['user_id'] as String,
             score: (r['score'] as num).toInt(),
           ),
         ),

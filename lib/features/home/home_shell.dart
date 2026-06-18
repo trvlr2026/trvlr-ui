@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/api/health_service.dart' show BackendStatus;
 import '../../providers/providers.dart';
 import '../leaderboards/leaderboard_screen.dart';
 import '../map/map_screen.dart';
@@ -39,9 +40,9 @@ class _HomeShellState extends ConsumerState<HomeShell> {
           ),
           SafeArea(
             child: Align(
-              alignment: Alignment.topRight,
-              child: Padding(
-                padding: const EdgeInsets.only(top: 12, right: 12),
+          alignment: Alignment.topLeft,
+          child: Padding(
+            padding: const EdgeInsets.only(top: 12, left: 12),
                 child: _BackendStatusChip(status: backendStatus),
               ),
             ),
@@ -59,15 +60,25 @@ class _HomeShellState extends ConsumerState<HomeShell> {
 
 class _BackendStatusChip extends StatelessWidget {
   const _BackendStatusChip({required this.status});
-  final AsyncValue<bool> status;
+  final AsyncValue<BackendStatus> status;
 
   @override
   Widget build(BuildContext context) {
-    final isOnline = status.valueOrNull ?? false;
+    final value = status.valueOrNull ?? BackendStatus.offline;
     final isLoading = status is AsyncLoading;
 
-    final color = isOnline ? const Color(0xFF16A34A) : const Color(0xFF9CA3AF);
-    final label = isLoading ? 'Checking...' : (isOnline ? 'Online' : 'Offline');
+    final color = switch (value) {
+      BackendStatus.lanOnline => const Color(0xFF16A34A),
+      BackendStatus.vpsOnline => const Color(0xFFD97706),
+      BackendStatus.offline   => const Color(0xFF9CA3AF),
+    };
+    final label = isLoading
+        ? 'Checking...'
+        : switch (value) {
+            BackendStatus.lanOnline => 'Online',
+            BackendStatus.vpsOnline => 'VPS Online',
+            BackendStatus.offline   => 'Offline',
+          };
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 300),
@@ -92,7 +103,7 @@ class _BackendStatusChip extends StatelessWidget {
               decoration: BoxDecoration(
                 color: color,
                 shape: BoxShape.circle,
-                boxShadow: isOnline
+                boxShadow: value.isOnline
                     ? [BoxShadow(color: color.withValues(alpha: 0.6), blurRadius: 4, spreadRadius: 1)]
                     : null,
               ),

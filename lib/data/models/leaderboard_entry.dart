@@ -5,8 +5,9 @@ enum LeaderboardLevel { district, state, national }
 
 /// Entry returned by the real /leaderboard/ API.
 class ApiLeaderboardEntry {
-  const ApiLeaderboardEntry({required this.userId, required this.score});
+  const ApiLeaderboardEntry({required this.userId, required this.userName, required this.score});
   final String userId;
+  final String userName;
   final int score;
 }
 

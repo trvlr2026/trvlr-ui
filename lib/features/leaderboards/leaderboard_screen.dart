@@ -230,7 +230,7 @@ class _BoardTile extends StatelessWidget {
           children: [
             Expanded(
               child: Text(
-                _displayId(entry.userId),
+                entry.userName,
                 style: TextStyle(
                   fontWeight: isCurrentUser ? FontWeight.bold : FontWeight.w500,
                   color: isCurrentUser ? AppColors.primaryDark : AppColors.textPrimary,
@@ -269,13 +269,6 @@ class _BoardTile extends StatelessWidget {
     );
   }
 
-  /// Show full name / short id as-is; truncate UUID-format strings.
-  static String _displayId(String id) {
-    // UUID pattern: 8-4-4-4-12 hex chars
-    final uuidRe = RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$');
-    if (uuidRe.hasMatch(id)) return '${id.substring(0, 8)}…';
-    return id;
-  }
 }
 
 // ── State-only picker bottom sheet ────────────────────────────────────────────

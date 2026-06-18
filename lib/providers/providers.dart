@@ -1,7 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../core/api/health_service.dart';
+import '../core/api/health_service.dart' show HealthService, BackendStatus;
 import '../core/api/trvlr_api_client.dart';
 import '../core/geo/geofence.dart';
 import '../core/location/location_service.dart';
@@ -40,25 +40,29 @@ final authNotifierProvider = StateNotifierProvider<AuthNotifier, AuthState?>((re
 
 // ── Backend status ────────────────────────────────────────────────────────────
 
-final backendStatusProvider = StreamProvider<bool>((ref) {
+final backendStatusProvider = StreamProvider<BackendStatus>((ref) {
   return ref.watch(healthServiceProvider).healthStream();
 });
 
-// ── API client (token-aware, shared across providers) ────────────────────────
+// ── API client (token-aware + active-URL-aware) ───────────────────────────────
 
 final apiClientProvider = Provider<TrvlrApiClient>((ref) {
   final auth = ref.watch(authNotifierProvider);
-  return TrvlrApiClient(token: auth?.token);
+  final status = ref.watch(backendStatusProvider).valueOrNull ?? BackendStatus.offline;
+  return TrvlrApiClient(token: auth?.token, baseUrl: status.activeBaseUrl);
 });
 
 // ── Repository ────────────────────────────────────────────────────────────────
 
 final repositoryProvider = Provider<TrvlrRepository>((ref) {
   final prefs = ref.watch(sharedPreferencesProvider);
-  final isOnline = ref.watch(backendStatusProvider).valueOrNull ?? false;
+  final status = ref.watch(backendStatusProvider).valueOrNull ?? BackendStatus.offline;
   final auth = ref.watch(authNotifierProvider);
-  return isOnline
-      ? TrvlrRepositoryOnline(prefs, userId: auth?.userId ?? '', token: auth?.token)
+  return status.isOnline
+      ? TrvlrRepositoryOnline(prefs,
+          userId: auth?.userId ?? '',
+          token: auth?.token,
+          baseUrl: status.activeBaseUrl)
       : TrvlrRepositoryOffline(prefs);
 });
 
@@ -87,7 +91,7 @@ final visitedPlaceIdsProvider = FutureProvider<Set<String>>((ref) async {
 });
 
 final userStatsProvider = FutureProvider<UserStats>((ref) async {
-  final isOnline = ref.watch(backendStatusProvider).valueOrNull ?? false;
+  final isOnline = ref.watch(backendStatusProvider).valueOrNull?.isOnline ?? false;
   final auth = ref.watch(authNotifierProvider);
   if (isOnline && auth != null) {
     final profile = await ref.watch(apiClientProvider).getProfile(userId: auth.userId);
@@ -98,7 +102,7 @@ final userStatsProvider = FutureProvider<UserStats>((ref) async {
 
 /// Email fetched from /profile — only available when online and signed in.
 final userEmailProvider = FutureProvider<String>((ref) async {
-  final isOnline = ref.watch(backendStatusProvider).valueOrNull ?? false;
+  final isOnline = ref.watch(backendStatusProvider).valueOrNull?.isOnline ?? false;
   final auth = ref.watch(authNotifierProvider);
   if (isOnline && auth != null) {
     final profile = await ref.watch(apiClientProvider).getProfile(userId: auth.userId);
@@ -156,7 +160,7 @@ final myPhotosProvider = FutureProvider<GalleryScanResult>((ref) async {
 /// Fetches all visited entries from the backend (all pages) when online.
 /// Returns an empty list when offline or not signed in.
 final allVisitedPlacesProvider = FutureProvider<List<ApiVisit>>((ref) async {
-  final isOnline = ref.watch(backendStatusProvider).valueOrNull ?? false;
+  final isOnline = ref.watch(backendStatusProvider).valueOrNull?.isOnline ?? false;
   final auth = ref.watch(authNotifierProvider);
   if (!isOnline || auth == null) return [];
 

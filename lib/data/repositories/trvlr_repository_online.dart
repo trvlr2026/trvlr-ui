@@ -12,12 +12,13 @@ import 'trvlr_repository_offline.dart';
 /// Online repository — delegates every method to [TrvlrRepositoryOffline]
 /// except those that have a real backend endpoint.
 class TrvlrRepositoryOnline implements TrvlrRepository {
-  TrvlrRepositoryOnline(SharedPreferences prefs, {required this.userId, this.token})
+  TrvlrRepositoryOnline(SharedPreferences prefs, {required this.userId, this.token, this.baseUrl})
       : _offline = TrvlrRepositoryOffline(prefs),
-        _api = TrvlrApiClient(token: token);
+        _api = TrvlrApiClient(token: token, baseUrl: baseUrl);
 
   final String userId;
   final String? token;
+  final String? baseUrl;
   final TrvlrRepositoryOffline _offline;
   final TrvlrApiClient _api;
 

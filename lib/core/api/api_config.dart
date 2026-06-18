@@ -1,8 +1,7 @@
 class ApiConfig {
-  // Replace with your machine's LAN IP when debugging on a physical device.
-  // Find it by running `ipconfig` on Windows and looking for IPv4 Address.
+  /// Local LAN backend — preferred when on the same Wi-Fi as the dev machine.
   static const baseUrl = 'http://192.168.29.98:8000';
 
-  // Hardcoded user ID sent with every API request.
-  static const userId = 'bhagi';
+  /// VPS fallback — used when the LAN backend is unreachable.
+  static const vpsBaseUrl = 'http://213.136.67.24:80';
 }

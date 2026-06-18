@@ -85,7 +85,7 @@ class _MyPhotosScreenState extends ConsumerState<MyPhotosScreen> {
   @override
   Widget build(BuildContext context) {
     final scanAsync = ref.watch(myPhotosProvider);
-    final isOnline = ref.watch(backendStatusProvider).valueOrNull ?? false;
+    final isOnline = ref.watch(backendStatusProvider).valueOrNull?.isOnline ?? false;
     final visitedPlacesAsync = ref.watch(allVisitedPlacesProvider);
 
     return Scaffold(

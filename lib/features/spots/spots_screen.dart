@@ -13,35 +13,95 @@ class SpotsScreen extends ConsumerStatefulWidget {
 }
 
 class _SpotsScreenState extends ConsumerState<SpotsScreen> {
+  static const _pageSize = 50;
+  // Load next page when user is within this many items of the end
+  static const _prefetchThreshold = _pageSize * 2;
+
   String _selectedState = 'Karnataka';
   String _selectedDistrict = 'Bengaluru Urban';
+
+  final _places = <Place>[];
+  final _scrollController = ScrollController();
+  var _nextPage = 1;
+  var _isLoading = false;
+  var _hasMore = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+    // Defer first load until after first frame so providers are ready
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadNextPage());
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (_isLoading || !_hasMore) return;
+    final pos = _scrollController.position;
+    // Each card is ~90px; trigger when within ~2 pages of the end
+    final triggerOffset = pos.maxScrollExtent - _prefetchThreshold * 90.0;
+    if (pos.pixels >= triggerOffset) _loadNextPage();
+  }
+
+  Future<void> _loadNextPage() async {
+    if (_isLoading || !_hasMore) return;
+    setState(() { _isLoading = true; _error = null; });
+    try {
+      final results = await ref.read(apiClientProvider).getSpotsByFilter(
+            state: _selectedState,
+            district: _selectedDistrict,
+            page: _nextPage,
+            pageSize: _pageSize,
+          );
+      if (!mounted) return;
+      setState(() {
+        _places.addAll(results);
+        _nextPage++;
+        _hasMore = results.length >= _pageSize;
+      });
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  void _resetAndReload() {
+    setState(() {
+      _places.clear();
+      _nextPage = 1;
+      _hasMore = true;
+      _error = null;
+    });
+    _loadNextPage();
+  }
 
   void _onStateChanged(String? newState) {
     if (newState == null || newState == _selectedState) return;
     final tree = ref.read(placesTreeProvider).valueOrNull;
     final districts = tree?.districtsFor(newState) ?? [];
-    setState(() {
-      _selectedState = newState;
-      _selectedDistrict = districts.isNotEmpty ? districts.first : '';
-    });
+    _selectedState = newState;
+    _selectedDistrict = districts.isNotEmpty ? districts.first : '';
+    _resetAndReload();
   }
 
   void _onDistrictChanged(String? newDistrict) {
     if (newDistrict == null || newDistrict == _selectedDistrict) return;
-    setState(() => _selectedDistrict = newDistrict);
+    _selectedDistrict = newDistrict;
+    _resetAndReload();
   }
 
   @override
   Widget build(BuildContext context) {
     final treeAsync = ref.watch(placesTreeProvider);
-    final spotsAsync = ref.watch(
-      spotsByFilterProvider(SpotsFilterParams(state: _selectedState, district: _selectedDistrict)),
-    );
-
     final stateNames = treeAsync.valueOrNull?.states.map((s) => s.state).toList() ?? [_selectedState];
     final districts = treeAsync.valueOrNull?.districtsFor(_selectedState) ?? [_selectedDistrict];
-
-    // Keep selections valid when tree loads
     final validState = stateNames.contains(_selectedState) ? _selectedState : stateNames.first;
     final validDistrict = districts.contains(_selectedDistrict) ? _selectedDistrict : (districts.isNotEmpty ? districts.first : '');
 
@@ -58,30 +118,30 @@ class _SpotsScreenState extends ConsumerState<SpotsScreen> {
             onStateChanged: _onStateChanged,
             onDistrictChanged: _onDistrictChanged,
           ),
-          if (spotsAsync.isLoading) const LinearProgressIndicator(minHeight: 2),
+          if (_isLoading && _places.isEmpty) const LinearProgressIndicator(minHeight: 2),
           Expanded(
-            child: spotsAsync.when(
-              loading: () => const _LoadingView(),
-              error: (e, _) => _ErrorView(
-                message: '$e',
-                onRetry: () => ref.invalidate(
-                  spotsByFilterProvider(SpotsFilterParams(state: _selectedState, district: _selectedDistrict)),
-                ),
-              ),
-              data: (spots) {
-                if (spots.isEmpty) {
-                  return _EmptyView(district: _selectedDistrict);
-                }
-                return ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                  itemCount: spots.length,
-                  itemBuilder: (context, index) => Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: _SpotCard(place: spots[index]),
-                  ),
-                );
-              },
-            ),
+            child: _error != null && _places.isEmpty
+                ? _ErrorView(message: _error!, onRetry: _resetAndReload)
+                : _places.isEmpty && !_isLoading
+                    ? _EmptyView(district: _selectedDistrict)
+                    : ListView.builder(
+                        controller: _scrollController,
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                        // +1 for the bottom loader row
+                        itemCount: _places.length + (_hasMore ? 1 : 0),
+                        itemBuilder: (context, index) {
+                          if (index == _places.length) {
+                            return const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 20),
+                              child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                            );
+                          }
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: _SpotCard(place: _places[index]),
+                          );
+                        },
+                      ),
           ),
         ],
       ),
