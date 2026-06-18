@@ -3,6 +3,13 @@ import 'visit.dart';
 
 enum LeaderboardLevel { district, state, national }
 
+/// Entry returned by the real /leaderboard/ API.
+class ApiLeaderboardEntry {
+  const ApiLeaderboardEntry({required this.userId, required this.score});
+  final String userId;
+  final int score;
+}
+
 class LeaderboardEntry {
   const LeaderboardEntry({
     required this.userId,

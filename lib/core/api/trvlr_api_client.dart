@@ -245,6 +245,48 @@ class TrvlrApiClient {
     );
   }
 
+  Future<List<ApiLeaderboardEntry>> getLeaderboard({
+    String? state,
+    String? district,
+    int pageSize = 50,
+  }) async {
+    final all = <ApiLeaderboardEntry>[];
+    var page = 1;
+
+    while (true) {
+      final uri = Uri.parse('${ApiConfig.baseUrl}/leaderboard/').replace(
+        queryParameters: {
+          'page': page.toString(),
+          'page_size': pageSize.toString(),
+          if (state != null) 'state': state,
+          if (district != null) 'district': district,
+        },
+      );
+
+      final response = await http.get(uri, headers: _headers).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode != 200) {
+        throw Exception('getLeaderboard failed: ${response.statusCode}');
+      }
+
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final results = (data['results'] as List? ?? []).cast<Map<String, dynamic>>();
+      all.addAll(
+        results.map(
+          (r) => ApiLeaderboardEntry(
+            userId: r['user_id'] as String,
+            score: (r['score'] as num).toInt(),
+          ),
+        ),
+      );
+
+      if (results.length < pageSize) break;
+      page++;
+    }
+
+    return all;
+  }
+
   // "leisure:playground" → "playground"
   static String _parseCategory(String locationType) {
     final parts = locationType.split(':');

@@ -207,6 +207,26 @@ final leaderboardProvider = FutureProvider.family<List<LeaderboardEntry>, Leader
   return ref.watch(repositoryProvider).getLeaderboard(params.level, params.scope);
 });
 
+class LeaderboardFilterParams {
+  const LeaderboardFilterParams({this.state, this.district});
+  final String? state;
+  final String? district;
+
+  @override
+  bool operator ==(Object other) =>
+      other is LeaderboardFilterParams && other.state == state && other.district == district;
+  @override
+  int get hashCode => Object.hash(state, district);
+}
+
+final leaderboardByFilterProvider =
+    FutureProvider.family<List<ApiLeaderboardEntry>, LeaderboardFilterParams>((ref, params) async {
+  return ref.watch(apiClientProvider).getLeaderboard(
+        state: params.state,
+        district: params.district,
+      );
+});
+
 class LeaderboardParams {
   const LeaderboardParams({required this.level, this.scope});
   final LeaderboardLevel level;
