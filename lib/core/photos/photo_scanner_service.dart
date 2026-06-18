@@ -6,7 +6,6 @@ import '../../data/models/leaderboard_entry.dart';
 import '../permissions/permission_service.dart';
 
 class PhotoScannerService {
-  static const maxPhotos = 50;
   static const batchSize = 50;
 
   Future<List<PhotoCoord>> scanGallery({void Function(int scanned, int total)? onProgress}) async {
@@ -46,16 +45,15 @@ class PhotoScannerService {
 
     final album = paths.first;
     final count = await album.assetCountAsync;
-    final limit = count > maxPhotos ? maxPhotos : count;
     final photos = <GeoTaggedPhoto>[];
     var geotagged = 0;
 
-    for (var start = 0; start < limit; start += batchSize) {
-      final end = (start + batchSize < limit) ? start + batchSize : limit;
+    for (var start = 0; start < count; start += batchSize) {
+      final end = (start + batchSize < count) ? start + batchSize : count;
       final batch = await album.getAssetListRange(start: start, end: end);
 
       for (var i = 0; i < batch.length; i++) {
-        onProgress?.call(start + i + 1, limit);
+        onProgress?.call(start + i + 1, count);
         final asset = batch[i];
         final coords = await _resolveLocation(asset);
         if (coords != null) geotagged++;
@@ -71,7 +69,7 @@ class PhotoScannerService {
     photos.sort((a, b) => (b.takenAt ?? DateTime(0)).compareTo(a.takenAt ?? DateTime(0)));
 
     return GalleryScanResult(
-      totalPhotos: limit,
+      totalPhotos: count,
       geotaggedCount: geotagged,
       matchedPlacesCount: 0,
       photos: photos,

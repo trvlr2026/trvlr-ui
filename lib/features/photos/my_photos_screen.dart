@@ -21,11 +21,14 @@ class MyPhotosScreen extends ConsumerStatefulWidget {
 }
 
 class _MyPhotosScreenState extends ConsumerState<MyPhotosScreen> {
-  var _checkingIn = false;
+  // null = idle; non-null = check-in in progress
+  ({int done, int total})? _checkInProgress;
+
+  static const _checkInBatchSize = 100;
+
+  bool get _checkingIn => _checkInProgress != null;
 
   Future<void> _bulkCheckIn(GalleryScanResult result) async {
-    setState(() => _checkingIn = true);
-
     final coords = result.photos
         .where((p) => p.hasLocation)
         .map((p) => (
@@ -37,12 +40,28 @@ class _MyPhotosScreenState extends ConsumerState<MyPhotosScreen> {
 
     final totalPhotos = result.totalPhotos;
     final missingCoords = totalPhotos - result.geotaggedCount;
+    final total = coords.length;
+
+    setState(() => _checkInProgress = (done: 0, total: total));
 
     try {
-      final checkInResult = await ref.read(repositoryProvider).bulkCheckIn(coords);
+      final allScores = <BulkCheckInScore>[];
+
+      // Process in batches of 100
+      for (var start = 0; start < total; start += _checkInBatchSize) {
+        final end = (start + _checkInBatchSize).clamp(0, total);
+        final batch = coords.sublist(start, end);
+
+        final batchResult = await ref.read(repositoryProvider).bulkCheckIn(batch);
+        allScores.addAll(batchResult.scores);
+
+        if (!mounted) return;
+        setState(() => _checkInProgress = (done: end, total: total));
+      }
+
       if (!mounted) return;
 
-      // refresh stats + visits + categorized photos after earning new points
+      // Refresh stats + visits + categorized photos after earning new points
       ref.invalidate(visitsProvider);
       ref.invalidate(userStatsProvider);
       ref.invalidate(allVisitedPlacesProvider);
@@ -50,8 +69,8 @@ class _MyPhotosScreenState extends ConsumerState<MyPhotosScreen> {
       _showResultSheet(
         totalPhotos: totalPhotos,
         missingCoords: missingCoords,
-        considered: coords.length,
-        checkInResult: checkInResult,
+        considered: total,
+        checkInResult: BulkCheckInResult(scores: allScores),
       );
     } catch (e) {
       if (!mounted) return;
@@ -59,7 +78,7 @@ class _MyPhotosScreenState extends ConsumerState<MyPhotosScreen> {
         SnackBar(content: Text('Check-in failed: $e')),
       );
     } finally {
-      if (mounted) setState(() => _checkingIn = false);
+      if (mounted) setState(() => _checkInProgress = null);
     }
   }
 
@@ -102,7 +121,7 @@ class _MyPhotosScreenState extends ConsumerState<MyPhotosScreen> {
           ),
         ],
       ),
-      floatingActionButton: (isOnline && scanAsync.value != null && !scanAsync.value!.permissionDenied && scanAsync.value!.geotaggedCount > 0)
+          floatingActionButton: (isOnline && scanAsync.value != null && !scanAsync.value!.permissionDenied && scanAsync.value!.geotaggedCount > 0)
           ? FloatingActionButton.extended(
               onPressed: _checkingIn ? null : () => _bulkCheckIn(scanAsync.value!),
               icon: _checkingIn
@@ -115,7 +134,9 @@ class _MyPhotosScreenState extends ConsumerState<MyPhotosScreen> {
               label: Text(_checkingIn ? 'Checking in...' : 'Bulk check-in'),
             )
           : null,
-      body: scanAsync.when(
+      body: Stack(
+        children: [
+          scanAsync.when(
         loading: () => const _LoadingView(),
         error: (e, _) => Center(
           child: Padding(
@@ -205,6 +226,11 @@ class _MyPhotosScreenState extends ConsumerState<MyPhotosScreen> {
             ],
           );
         },
+      ),
+          // ── Check-in progress banner (floats above content) ──────────────
+          if (_checkInProgress != null)
+            _CheckInProgressBanner(progress: _checkInProgress!),
+        ],
       ),
     );
   }
@@ -830,6 +856,50 @@ class _PhotoThumbnail extends StatelessWidget {
               },
             );
           },
+        ),
+      ),
+    );
+  }
+}
+
+// ── Check-in progress banner ─────────────────────────────────────────────────
+
+class _CheckInProgressBanner extends StatelessWidget {
+  const _CheckInProgressBanner({required this.progress});
+
+  final ({int done, int total}) progress;
+
+  @override
+  Widget build(BuildContext context) {
+    final fraction = progress.total > 0 ? progress.done / progress.total : 0.0;
+    return Positioned(
+      top: 0,
+      left: 0,
+      right: 0,
+      child: Material(
+        elevation: 4,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            LinearProgressIndicator(value: fraction, minHeight: 4),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                children: [
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    'Checking in… ${progress.done} / ${progress.total} photos',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );
