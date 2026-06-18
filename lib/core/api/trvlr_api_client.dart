@@ -4,11 +4,21 @@ import 'package:http/http.dart' as http;
 
 import '../../data/models/api_visit.dart';
 import '../../data/models/bulk_checkin.dart';
+import '../../data/models/leaderboard_entry.dart';
 import '../../data/models/place.dart';
 import '../../data/models/places_tree.dart';
 import 'api_config.dart';
 
 class TrvlrApiClient {
+  TrvlrApiClient({this.token});
+
+  final String? token;
+
+  Map<String, String> get _headers => {
+        'Content-Type': 'application/json',
+        if (token != null) 'Authorization': 'Bearer $token',
+      };
+
   Future<List<Place>> getNearbyPlaces({
     required String userId,
     required double lat,
@@ -24,7 +34,7 @@ class TrvlrApiClient {
       },
     );
 
-    final response = await http.get(uri).timeout(const Duration(seconds: 10));
+    final response = await http.get(uri, headers: _headers).timeout(const Duration(seconds: 10));
 
     if (response.statusCode != 200) {
       throw Exception('getNearbyPlaces failed: ${response.statusCode}');
@@ -42,11 +52,9 @@ class TrvlrApiClient {
       latitude: (json['lat'] as num).toDouble(),
       longitude: (json['lon'] as num).toDouble(),
       district: json['district'] as String? ?? '',
-      // state is not returned by the API yet — will be empty until backend adds it
       state: '',
       country: 'India',
       pointsValue: json['score'] as int? ?? 10,
-      // use a sensible default check-in radius per category
       radiusM: _defaultRadius(json['location_type'] as String? ?? ''),
       category: _parseCategory(json['location_type'] as String? ?? 'landmark'),
     );
@@ -60,7 +68,7 @@ class TrvlrApiClient {
     final response = await http
         .post(
           uri,
-          headers: {'Content-Type': 'application/json'},
+          headers: _headers,
           body: jsonEncode({
             'user_id': userId,
             'coordinates': coordinates
@@ -104,7 +112,7 @@ class TrvlrApiClient {
       },
     );
 
-    final response = await http.get(uri).timeout(const Duration(seconds: 10));
+    final response = await http.get(uri, headers: _headers).timeout(const Duration(seconds: 10));
 
     if (response.statusCode != 200) {
       throw Exception('getVisits failed: ${response.statusCode}');
@@ -137,9 +145,37 @@ class TrvlrApiClient {
     );
   }
 
+  Future<({UserStats stats, String email, String displayName})> getProfile({
+    required String userId,
+  }) async {
+    final uri = Uri.parse('${ApiConfig.baseUrl}/profile/$userId');
+    final response = await http.get(uri, headers: _headers).timeout(const Duration(seconds: 10));
+
+    if (response.statusCode != 200) {
+      throw Exception('getProfile failed: ${response.statusCode}');
+    }
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    final pointsByState = <String, int>{};
+    for (final entry in (data['points_by_state'] as List? ?? [])) {
+      final e = entry as Map<String, dynamic>;
+      pointsByState[e['state'] as String] = (e['score'] as num).toInt();
+    }
+
+    return (
+      stats: UserStats(
+        totalPoints: (data['total_score'] as num?)?.toInt() ?? 0,
+        placesVisited: (data['total_places_visited_count'] as num?)?.toInt() ?? 0,
+        pointsByState: pointsByState,
+      ),
+      email: data['user_email'] as String? ?? '',
+      displayName: data['user_name'] as String? ?? '',
+    );
+  }
+
   Future<PlacesTree> getPlacesTree() async {
     final uri = Uri.parse('${ApiConfig.baseUrl}/places-tree');
-    final response = await http.get(uri).timeout(const Duration(seconds: 10));
+    final response = await http.get(uri, headers: _headers).timeout(const Duration(seconds: 10));
 
     if (response.statusCode != 200) {
       throw Exception('getPlacesTree failed: ${response.statusCode}');
@@ -176,7 +212,7 @@ class TrvlrApiClient {
         },
       );
 
-      final response = await http.get(uri).timeout(const Duration(seconds: 10));
+      final response = await http.get(uri, headers: _headers).timeout(const Duration(seconds: 10));
 
       if (response.statusCode != 200) {
         throw Exception('getSpotsByFilter failed: ${response.statusCode}');

@@ -1,6 +1,5 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../core/api/api_config.dart';
 import '../../core/api/trvlr_api_client.dart';
 import '../models/bulk_checkin.dart';
 import '../models/leaderboard_entry.dart';
@@ -12,13 +11,15 @@ import 'trvlr_repository_offline.dart';
 
 /// Online repository — delegates every method to [TrvlrRepositoryOffline]
 /// except those that have a real backend endpoint.
-/// Add new overrides here as more API endpoints are integrated.
 class TrvlrRepositoryOnline implements TrvlrRepository {
-  TrvlrRepositoryOnline(SharedPreferences prefs)
-      : _offline = TrvlrRepositoryOffline(prefs);
+  TrvlrRepositoryOnline(SharedPreferences prefs, {required this.userId, this.token})
+      : _offline = TrvlrRepositoryOffline(prefs),
+        _api = TrvlrApiClient(token: token);
 
+  final String userId;
+  final String? token;
   final TrvlrRepositoryOffline _offline;
-  final _api = TrvlrApiClient();
+  final TrvlrApiClient _api;
 
   // ── API-backed methods ──────────────────────────────────────────────────
 
@@ -26,7 +27,7 @@ class TrvlrRepositoryOnline implements TrvlrRepository {
   Future<List<Place>> getAllPlaces({double? lat, double? lon, double radiusM = 5000}) async {
     if (lat == null || lon == null) return _offline.getAllPlaces();
     return _api.getNearbyPlaces(
-      userId: ApiConfig.userId,
+      userId: userId,
       lat: lat,
       lon: lon,
       radiusM: radiusM,
@@ -88,7 +89,7 @@ class TrvlrRepositoryOnline implements TrvlrRepository {
   @override
   Future<BulkCheckInResult> bulkCheckIn(List<({double lat, double lon, String photoId})> coordinates) async {
     return _api.bulkCheckIn(
-      userId: ApiConfig.userId,
+      userId: userId,
       coordinates: coordinates,
     );
   }

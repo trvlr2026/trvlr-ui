@@ -26,10 +26,11 @@ class _LeaderboardScreenState extends ConsumerState<LeaderboardScreen> with Sing
     _loadDefaultScope();
   }
 
-  Future<void> _loadDefaultScope() async {
-    final user = await ref.read(repositoryProvider).getCurrentUser();
-    if (!mounted || user == null) return;
-    setState(() => _scope = user.homeDistrict);
+  void _loadDefaultScope() {
+    final user = ref.read(currentUserProvider);
+    if (user == null) return;
+    // homeDistrict is empty for backend users — leave scope unset until user picks one
+    if (user.homeDistrict.isNotEmpty) setState(() => _scope = user.homeDistrict);
   }
 
   @override
@@ -46,7 +47,7 @@ class _LeaderboardScreenState extends ConsumerState<LeaderboardScreen> with Sing
 
   @override
   Widget build(BuildContext context) {
-    final userAsync = ref.watch(currentUserProvider);
+    final user = ref.watch(currentUserProvider);
     final params = LeaderboardParams(level: _level, scope: _level == LeaderboardLevel.national ? null : _scope);
     final boardAsync = ref.watch(leaderboardProvider(params));
 
@@ -64,12 +65,8 @@ class _LeaderboardScreenState extends ConsumerState<LeaderboardScreen> with Sing
       ),
       body: Column(
         children: [
-          if (_level != LeaderboardLevel.national)
-            userAsync.when(
-              loading: () => const SizedBox.shrink(),
-              error: (_, __) => const SizedBox.shrink(),
-              data: (user) => _ScopePicker(level: _level, user: user, scope: _scope, onChanged: (s) => setState(() => _scope = s)),
-            ),
+          if (_level != LeaderboardLevel.national && user != null)
+            _ScopePicker(level: _level, user: user, scope: _scope, onChanged: (s) => setState(() => _scope = s)),
           Expanded(
             child: boardAsync.when(
               loading: () => const Center(child: CircularProgressIndicator()),

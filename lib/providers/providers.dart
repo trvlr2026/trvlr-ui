@@ -1,7 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../core/api/api_config.dart';
 import '../core/api/health_service.dart';
 import '../core/api/trvlr_api_client.dart';
 import '../core/geo/geofence.dart';
@@ -9,24 +8,22 @@ import '../core/location/location_service.dart';
 import '../core/permissions/permission_service.dart';
 import '../core/photos/photo_scanner_service.dart';
 import '../data/models/api_visit.dart';
+import '../data/models/auth_state.dart';
 import '../data/models/geo_tagged_photo.dart';
-import '../data/models/places_tree.dart';
 import '../data/models/leaderboard_entry.dart';
 import '../data/models/place.dart';
+import '../data/models/places_tree.dart';
 import '../data/models/user.dart';
 import '../data/models/visit.dart';
 import '../data/repositories/trvlr_repository.dart';
 import '../data/repositories/trvlr_repository_offline.dart';
 import '../data/repositories/trvlr_repository_online.dart';
+import 'auth_notifier.dart';
+
+// ── Infra ─────────────────────────────────────────────────────────────────────
 
 final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
   throw UnimplementedError('SharedPreferences must be overridden in main');
-});
-
-final repositoryProvider = Provider<TrvlrRepository>((ref) {
-  final prefs = ref.watch(sharedPreferencesProvider);
-  final isOnline = ref.watch(backendStatusProvider).valueOrNull ?? false;
-  return isOnline ? TrvlrRepositoryOnline(prefs) : TrvlrRepositoryOffline(prefs);
 });
 
 final locationServiceProvider = Provider((_) => LocationService());
@@ -34,13 +31,52 @@ final permissionServiceProvider = Provider((_) => PermissionService());
 final photoScannerProvider = Provider((_) => PhotoScannerService());
 final healthServiceProvider = Provider((_) => HealthService());
 
+// ── Auth ──────────────────────────────────────────────────────────────────────
+
+final authNotifierProvider = StateNotifierProvider<AuthNotifier, AuthState?>((ref) {
+  final prefs = ref.watch(sharedPreferencesProvider);
+  return AuthNotifier(prefs);
+});
+
+// ── Backend status ────────────────────────────────────────────────────────────
+
 final backendStatusProvider = StreamProvider<bool>((ref) {
   return ref.watch(healthServiceProvider).healthStream();
 });
 
-final currentUserProvider = FutureProvider<User?>((ref) async {
-  return ref.watch(repositoryProvider).getCurrentUser();
+// ── API client (token-aware, shared across providers) ────────────────────────
+
+final apiClientProvider = Provider<TrvlrApiClient>((ref) {
+  final auth = ref.watch(authNotifierProvider);
+  return TrvlrApiClient(token: auth?.token);
 });
+
+// ── Repository ────────────────────────────────────────────────────────────────
+
+final repositoryProvider = Provider<TrvlrRepository>((ref) {
+  final prefs = ref.watch(sharedPreferencesProvider);
+  final isOnline = ref.watch(backendStatusProvider).valueOrNull ?? false;
+  final auth = ref.watch(authNotifierProvider);
+  return isOnline
+      ? TrvlrRepositoryOnline(prefs, userId: auth?.userId ?? '', token: auth?.token)
+      : TrvlrRepositoryOffline(prefs);
+});
+
+// ── Current user (derived from auth state) ───────────────────────────────────
+
+final currentUserProvider = Provider<User?>((ref) {
+  final auth = ref.watch(authNotifierProvider);
+  if (auth == null) return null;
+  return User(
+    id: auth.userId,
+    displayName: auth.displayName,
+    email: '',
+    homeDistrict: '',
+    homeState: '',
+  );
+});
+
+// ── Data providers ────────────────────────────────────────────────────────────
 
 final visitsProvider = FutureProvider<List<Visit>>((ref) async {
   return ref.watch(repositoryProvider).getMyVisits();
@@ -51,7 +87,24 @@ final visitedPlaceIdsProvider = FutureProvider<Set<String>>((ref) async {
 });
 
 final userStatsProvider = FutureProvider<UserStats>((ref) async {
+  final isOnline = ref.watch(backendStatusProvider).valueOrNull ?? false;
+  final auth = ref.watch(authNotifierProvider);
+  if (isOnline && auth != null) {
+    final profile = await ref.watch(apiClientProvider).getProfile(userId: auth.userId);
+    return profile.stats;
+  }
   return ref.watch(repositoryProvider).getMyStats();
+});
+
+/// Email fetched from /profile — only available when online and signed in.
+final userEmailProvider = FutureProvider<String>((ref) async {
+  final isOnline = ref.watch(backendStatusProvider).valueOrNull ?? false;
+  final auth = ref.watch(authNotifierProvider);
+  if (isOnline && auth != null) {
+    final profile = await ref.watch(apiClientProvider).getProfile(userId: auth.userId);
+    return profile.email;
+  }
+  return '';
 });
 
 final placesProvider = FutureProvider<List<Place>>((ref) async {
@@ -101,25 +154,24 @@ final myPhotosProvider = FutureProvider<GalleryScanResult>((ref) async {
 });
 
 /// Fetches all visited entries from the backend (all pages) when online.
-/// Returns an empty list when offline.
-/// Each [ApiVisit] carries a [photoId] used for exact-match categorisation.
+/// Returns an empty list when offline or not signed in.
 final allVisitedPlacesProvider = FutureProvider<List<ApiVisit>>((ref) async {
   final isOnline = ref.watch(backendStatusProvider).valueOrNull ?? false;
-  if (!isOnline) return [];
+  final auth = ref.watch(authNotifierProvider);
+  if (!isOnline || auth == null) return [];
 
-  final api = TrvlrApiClient();
+  final api = ref.watch(apiClientProvider);
   const pageSize = 100;
   final all = <ApiVisit>[];
   var page = 1;
 
   while (true) {
     final response = await api.getVisits(
-      userId: ApiConfig.userId,
+      userId: auth.userId,
       page: page,
       pageSize: pageSize,
     );
     all.addAll(response.results);
-    // stop when we received fewer items than the page size — last page reached
     if (response.results.length < pageSize) break;
     page++;
   }
@@ -127,8 +179,10 @@ final allVisitedPlacesProvider = FutureProvider<List<ApiVisit>>((ref) async {
   return all;
 });
 
+// ── Spots ─────────────────────────────────────────────────────────────────────
+
 final placesTreeProvider = FutureProvider<PlacesTree>((ref) async {
-  return TrvlrApiClient().getPlacesTree();
+  return ref.watch(apiClientProvider).getPlacesTree();
 });
 
 class SpotsFilterParams {
@@ -144,8 +198,10 @@ class SpotsFilterParams {
 }
 
 final spotsByFilterProvider = FutureProvider.family<List<Place>, SpotsFilterParams>((ref, params) async {
-  return TrvlrApiClient().getSpotsByFilter(state: params.state, district: params.district);
+  return ref.watch(apiClientProvider).getSpotsByFilter(state: params.state, district: params.district);
 });
+
+// ── Leaderboard ───────────────────────────────────────────────────────────────
 
 final leaderboardProvider = FutureProvider.family<List<LeaderboardEntry>, LeaderboardParams>((ref, params) async {
   return ref.watch(repositoryProvider).getLeaderboard(params.level, params.scope);

@@ -43,17 +43,8 @@ class _SplashScreenState extends ConsumerState<_SplashScreen> {
   Future<void> _bootstrap() async {
     await Future<void>.delayed(const Duration(milliseconds: 900));
     if (!mounted) return;
-    final repo = ref.read(repositoryProvider);
-    final user = await repo.getCurrentUser();
-    final onboarding = await repo.isOnboardingComplete();
-    if (!mounted) return;
-    if (user == null) {
-      context.go('/login');
-    } else if (!onboarding) {
-      context.go('/onboarding');
-    } else {
-      context.go('/home');
-    }
+    final auth = ref.read(authNotifierProvider);
+    context.go(auth != null ? '/home' : '/login');
   }
 
   @override
