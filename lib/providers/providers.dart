@@ -6,7 +6,9 @@ import '../core/api/trvlr_api_client.dart';
 import '../core/geo/geofence.dart';
 import '../core/location/location_service.dart';
 import '../core/permissions/permission_service.dart';
+import '../core/photos/photo_scan_cache.dart';
 import '../core/photos/photo_scanner_service.dart';
+import '../core/photos/processed_photo_store.dart';
 import '../data/models/api_visit.dart';
 import '../data/models/auth_state.dart';
 import '../data/models/geo_tagged_photo.dart';
@@ -30,6 +32,18 @@ final locationServiceProvider = Provider((_) => LocationService());
 final permissionServiceProvider = Provider((_) => PermissionService());
 final photoScannerProvider = Provider((_) => PhotoScannerService());
 final healthServiceProvider = Provider((_) => HealthService());
+
+final processedPhotoStoreProvider = Provider<ProcessedPhotoStore>((ref) {
+  final prefs = ref.watch(sharedPreferencesProvider);
+  final store = ProcessedPhotoStore(prefs);
+  store.load();
+  return store;
+});
+
+final photoScanCacheProvider = Provider<PhotoScanCache>((ref) {
+  final prefs = ref.watch(sharedPreferencesProvider);
+  return PhotoScanCache(prefs);
+});
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
@@ -125,11 +139,13 @@ final myPhotosProvider = FutureProvider<GalleryScanResult>((ref) async {
   final scanner = ref.read(photoScannerProvider);
   final places = await ref.read(placesProvider.future);
 
+  final cache = ref.read(photoScanCacheProvider);
   ref.read(myPhotosScanProgressProvider.notifier).state = null;
   final result = await scanner.scanGalleryAll(
     onProgress: (scanned, total) {
       ref.read(myPhotosScanProgressProvider.notifier).state = (scanned, total);
     },
+    cache: cache,
   );
 
   var matched = 0;
@@ -146,7 +162,8 @@ final myPhotosProvider = FutureProvider<GalleryScanResult>((ref) async {
       district: place?.district,
       state: place?.state,
     );
-  }).toList();
+  }).toList()
+    ..sort((a, b) => (b.takenAt ?? DateTime(0)).compareTo(a.takenAt ?? DateTime(0)));
 
   return GalleryScanResult(
     totalPhotos: result.totalPhotos,

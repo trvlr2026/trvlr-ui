@@ -5,7 +5,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:photo_manager/photo_manager.dart';
 
+import 'package:permission_handler/permission_handler.dart' show openAppSettings;
+
 import '../../core/permissions/permission_service.dart';
+import '../../core/photos/processed_photo_store.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/photo_id.dart';
 import '../../data/models/api_visit.dart';
@@ -20,23 +23,77 @@ class MyPhotosScreen extends ConsumerStatefulWidget {
   ConsumerState<MyPhotosScreen> createState() => _MyPhotosScreenState();
 }
 
-class _MyPhotosScreenState extends ConsumerState<MyPhotosScreen> {
+enum _PhotoFilter { all, visited, unknown, noGps }
+
+class _MyPhotosScreenState extends ConsumerState<MyPhotosScreen>
+    with WidgetsBindingObserver {
   // null = idle; non-null = check-in in progress
   ({int done, int total})? _checkInProgress;
+  _PhotoFilter _filter = _PhotoFilter.all;
+  bool _gpsBannerDismissed = false;
 
   static const _checkInBatchSize = 100;
 
   bool get _checkingIn => _checkInProgress != null;
 
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  Future<void> _forceFullRescan() async {
+    // Clear cache so every photo is re-scanned from scratch (re-reads EXIF/GPS).
+    await ref.read(photoScanCacheProvider).clear();
+    if (!mounted) return;
+    setState(() => _gpsBannerDismissed = false);
+    ref.invalidate(myPhotosProvider);
+    ref.invalidate(allVisitedPlacesProvider);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Full rescan started — re-reading all photos…')),
+    );
+  }
+
+  // Fires when user returns to the app (e.g. after taking a photo with the camera).
+  // 3-second delay: Samsung (and other OEMs) write GPS to EXIF/MediaStore
+  // asynchronously after the shutter — scanning immediately returns null coords.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      Future.delayed(const Duration(seconds: 3), () {
+        if (!mounted) return;
+        final isScanning = ref.read(myPhotosProvider).isLoading;
+        if (!isScanning) ref.invalidate(myPhotosProvider);
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
   Future<void> _bulkCheckIn(GalleryScanResult result) async {
+    final store = ref.read(processedPhotoStoreProvider);
+
     final coords = result.photos
         .where((p) => p.hasLocation)
+        .where((p) => !store.contains(generatePhotoId(p.latitude!, p.longitude!, p.takenAt)))
         .map((p) => (
               lat: p.latitude!,
               lon: p.longitude!,
               photoId: generatePhotoId(p.latitude!, p.longitude!, p.takenAt),
             ))
         .toList();
+
+    if (coords.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('All photos already checked in')),
+      );
+      return;
+    }
 
     final totalPhotos = result.totalPhotos;
     final missingCoords = totalPhotos - result.geotaggedCount;
@@ -54,6 +111,7 @@ class _MyPhotosScreenState extends ConsumerState<MyPhotosScreen> {
 
         final batchResult = await ref.read(repositoryProvider).bulkCheckIn(batch);
         allScores.addAll(batchResult.scores);
+        await store.markDone(batch.map((c) => c.photoId));
 
         if (!mounted) return;
         setState(() => _checkInProgress = (done: end, total: total));
@@ -107,6 +165,15 @@ class _MyPhotosScreenState extends ConsumerState<MyPhotosScreen> {
     final isOnline = ref.watch(backendStatusProvider).valueOrNull?.isOnline ?? false;
     final visitedPlacesAsync = ref.watch(allVisitedPlacesProvider);
 
+    final store = ref.watch(processedPhotoStoreProvider);
+    final newCount = scanAsync.value == null
+        ? 0
+        : scanAsync.value!.photos
+            .where((p) =>
+                p.hasLocation &&
+                !store.contains(generatePhotoId(p.latitude!, p.longitude!, p.takenAt)))
+            .length;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('My Photos'),
@@ -118,6 +185,7 @@ class _MyPhotosScreenState extends ConsumerState<MyPhotosScreen> {
               ref.invalidate(myPhotosProvider);
               ref.invalidate(allVisitedPlacesProvider);
             },
+            onLongPress: _forceFullRescan,
           ),
         ],
       ),
@@ -131,7 +199,7 @@ class _MyPhotosScreenState extends ConsumerState<MyPhotosScreen> {
                       child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                     )
                   : const Icon(Icons.where_to_vote_rounded),
-              label: Text(_checkingIn ? 'Checking in...' : 'Bulk check-in'),
+              label: Text(_checkingIn ? 'Checking in...' : 'Bulk check-in ($newCount new)'),
             )
           : null,
       body: Stack(
@@ -171,35 +239,16 @@ class _MyPhotosScreenState extends ConsumerState<MyPhotosScreen> {
           final visitedPlaces = visitedPlacesAsync.valueOrNull ?? [];
           final sections = _categorize(result, visitedPlaces, isOnline);
 
-          // Build flat list: section headers + photo items interleaved
-          final items = <Object>[];
-          if (sections.visited.isNotEmpty) {
-            items.add(_SectionMeta(
-              title: 'Visited',
-              icon: Icons.check_circle_rounded,
-              color: AppColors.primary,
-              count: sections.visited.length,
-            ));
-            items.addAll(sections.visited);
-          }
-          if (sections.unknown.isNotEmpty) {
-            items.add(_SectionMeta(
-              title: 'Unknown',
-              icon: Icons.help_outline_rounded,
-              color: Colors.amber.shade700,
-              count: sections.unknown.length,
-            ));
-            items.addAll(sections.unknown);
-          }
-          if (sections.noGps.isNotEmpty) {
-            items.add(_SectionMeta(
-              title: 'No GPS',
-              icon: Icons.location_off_rounded,
-              color: AppColors.textSecondary,
-              count: sections.noGps.length,
-            ));
-            items.addAll(sections.noGps);
-          }
+          final filtered = switch (_filter) {
+            _PhotoFilter.all     => [...sections.visited, ...sections.unknown, ...sections.noGps],
+            _PhotoFilter.visited => sections.visited,
+            _PhotoFilter.unknown => sections.unknown,
+            _PhotoFilter.noGps   => sections.noGps,
+          };
+
+          final showGpsBanner = !_gpsBannerDismissed &&
+              result.totalPhotos > 0 &&
+              result.geotaggedCount == 0;
 
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -207,21 +256,64 @@ class _MyPhotosScreenState extends ConsumerState<MyPhotosScreen> {
               _StatsBanner(result: result, isOnline: isOnline, visitedCount: sections.visited.length),
               if (isOnline && visitedPlacesAsync.isLoading)
                 const LinearProgressIndicator(minHeight: 2),
-              Expanded(
-                child: ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
-                  itemCount: items.length,
-                  itemBuilder: (context, index) {
-                    final item = items[index];
-                    if (item is _SectionMeta) {
-                      return _SectionHeader(meta: item);
-                    }
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: _PhotoRow(photo: item as GeoTaggedPhoto),
-                    );
-                  },
+              if (showGpsBanner)
+                _GpsPermissionBanner(
+                  onDismiss: () => setState(() => _gpsBannerDismissed = true),
+                  onForceRescan: _forceFullRescan,
                 ),
+              // ── Filter chips ─────────────────────────────────────────────
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(
+                  spacing: 8,
+                  children: [
+                    _FilterChip(
+                      label: 'All',
+                      count: sections.visited.length + sections.unknown.length + sections.noGps.length,
+                      selected: _filter == _PhotoFilter.all,
+                      onTap: () => setState(() => _filter = _PhotoFilter.all),
+                    ),
+                    _FilterChip(
+                      label: 'Visited',
+                      count: sections.visited.length,
+                      selected: _filter == _PhotoFilter.visited,
+                      onTap: () => setState(() => _filter = _PhotoFilter.visited),
+                    ),
+                    _FilterChip(
+                      label: 'Unknown',
+                      count: sections.unknown.length,
+                      selected: _filter == _PhotoFilter.unknown,
+                      onTap: () => setState(() => _filter = _PhotoFilter.unknown),
+                    ),
+                    _FilterChip(
+                      label: 'No GPS',
+                      count: sections.noGps.length,
+                      selected: _filter == _PhotoFilter.noGps,
+                      onTap: () => setState(() => _filter = _PhotoFilter.noGps),
+                    ),
+                  ],
+                ),
+              ),
+              // ── Photo list ───────────────────────────────────────────────
+              Expanded(
+                child: filtered.isEmpty
+                    ? Center(
+                        child: Text(
+                          'No photos in this category',
+                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                color: AppColors.textSecondary,
+                              ),
+                        ),
+                      )
+                    : ListView.builder(
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 96),
+                        itemCount: filtered.length,
+                        itemBuilder: (context, index) => Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: _PhotoRow(photo: filtered[index]),
+                        ),
+                      ),
               ),
             ],
           );
@@ -278,7 +370,134 @@ class _MyPhotosScreenState extends ConsumerState<MyPhotosScreen> {
       }
     }
 
+    int byDateDesc(GeoTaggedPhoto a, GeoTaggedPhoto b) =>
+        (b.takenAt ?? DateTime(0)).compareTo(a.takenAt ?? DateTime(0));
+
+    visited.sort(byDateDesc);
+    unknown.sort(byDateDesc);
+    noGps.sort(byDateDesc);
+
     return (visited: visited, unknown: unknown, noGps: noGps);
+  }
+}
+
+// ── GPS permission guidance banner ───────────────────────────────────────────
+
+class _GpsPermissionBanner extends StatelessWidget {
+  const _GpsPermissionBanner({
+    required this.onDismiss,
+    required this.onForceRescan,
+  });
+
+  final VoidCallback onDismiss;
+  final VoidCallback onForceRescan;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: colorScheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.location_off_rounded,
+                  size: 18, color: colorScheme.onSecondaryContainer),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'No location data found in your photos',
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        color: colorScheme.onSecondaryContainer,
+                      ),
+                ),
+              ),
+              GestureDetector(
+                onTap: onDismiss,
+                child: Icon(Icons.close, size: 18,
+                    color: colorScheme.onSecondaryContainer),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Fix steps:\n'
+            '1. Settings → Apps → Camera → Permissions → Location → Allow\n'
+            '2. Tap "Re-read all photos" below to re-scan with the new permission',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSecondaryContainer,
+                ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.tonal(
+                  style: FilledButton.styleFrom(
+                      visualDensity: VisualDensity.compact),
+                  onPressed: () => openAppSettings(),
+                  child: const Text('App Settings'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: FilledButton(
+                  style: FilledButton.styleFrom(
+                      visualDensity: VisualDensity.compact),
+                  onPressed: onForceRescan,
+                  child: const Text('Re-read all photos'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Filter chip ──────────────────────────────────────────────────────────────
+
+class _FilterChip extends StatelessWidget {
+  const _FilterChip({
+    required this.label,
+    required this.count,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final int count;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        decoration: BoxDecoration(
+          color: selected ? colorScheme.primary : colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Text(
+          '$label ($count)',
+          style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                color: selected ? colorScheme.onPrimary : colorScheme.onSurfaceVariant,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+              ),
+        ),
+      ),
+    );
   }
 }
 

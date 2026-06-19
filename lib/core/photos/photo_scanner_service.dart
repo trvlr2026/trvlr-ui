@@ -4,6 +4,7 @@ import 'package:photo_manager/photo_manager.dart';
 import '../../data/models/geo_tagged_photo.dart';
 import '../../data/models/leaderboard_entry.dart';
 import '../permissions/permission_service.dart';
+import 'photo_scan_cache.dart';
 
 class PhotoScannerService {
   static const batchSize = 50;
@@ -18,6 +19,7 @@ class PhotoScannerService {
 
   Future<GalleryScanResult> scanGalleryAll({
     void Function(int scanned, int total)? onProgress,
+    PhotoScanCache? cache,
   }) async {
     var permission = await PhotoManager.getPermissionState(requestOption: photoPermissionRequest);
     if (!permission.hasAccess) {
@@ -33,8 +35,47 @@ class PhotoScannerService {
       );
     }
 
-    final paths = await PhotoManager.getAssetPathList(type: RequestType.image, onlyAll: true);
+    final lastScan = cache?.lastScanTimestamp;
+    final cachedPhotos = cache?.loadCachedPhotos() ?? [];
+
+    // asc: false → photo_manager returns newest first, giving correct display
+    // order even when asset.createDateTime is unreliable (e.g. epoch zero on
+    // some Android devices).
+    final filterOption = lastScan != null
+        ? FilterOptionGroup(
+            createTimeCond: DateTimeCond(
+              min: lastScan.add(const Duration(seconds: 1)),
+              max: DateTime.now(),
+            ),
+            orders: [
+              const OrderOption(type: OrderOptionType.createDate, asc: false),
+            ],
+          )
+        : FilterOptionGroup(
+            orders: [
+              const OrderOption(type: OrderOptionType.createDate, asc: false),
+            ],
+          );
+
+    final paths = await PhotoManager.getAssetPathList(
+      type: RequestType.image,
+      onlyAll: true,
+      filterOption: filterOption,
+    );
+
     if (paths.isEmpty) {
+      if (cachedPhotos.isNotEmpty) {
+        cachedPhotos.sort(
+          (a, b) => (b.takenAt ?? DateTime(0)).compareTo(a.takenAt ?? DateTime(0)),
+        );
+        final geotagged = cachedPhotos.where((p) => p.hasLocation).length;
+        return GalleryScanResult(
+          totalPhotos: cachedPhotos.length,
+          geotaggedCount: geotagged,
+          matchedPlacesCount: 0,
+          photos: cachedPhotos,
+        );
+      }
       return const GalleryScanResult(
         totalPhotos: 0,
         geotaggedCount: 0,
@@ -44,20 +85,20 @@ class PhotoScannerService {
     }
 
     final album = paths.first;
-    final count = await album.assetCountAsync;
-    final photos = <GeoTaggedPhoto>[];
-    var geotagged = 0;
+    final newCount = await album.assetCountAsync;
+    final newPhotos = <GeoTaggedPhoto>[];
+    var geotagged = cachedPhotos.where((p) => p.hasLocation).length;
 
-    for (var start = 0; start < count; start += batchSize) {
-      final end = (start + batchSize < count) ? start + batchSize : count;
+    for (var start = 0; start < newCount; start += batchSize) {
+      final end = (start + batchSize).clamp(0, newCount);
       final batch = await album.getAssetListRange(start: start, end: end);
 
       for (var i = 0; i < batch.length; i++) {
-        onProgress?.call(start + i + 1, count);
+        onProgress?.call(cachedPhotos.length + start + i + 1, cachedPhotos.length + newCount);
         final asset = batch[i];
         final coords = await _resolveLocation(asset);
         if (coords != null) geotagged++;
-        photos.add(GeoTaggedPhoto(
+        newPhotos.add(GeoTaggedPhoto(
           assetId: asset.id,
           latitude: coords?.$1,
           longitude: coords?.$2,
@@ -66,13 +107,18 @@ class PhotoScannerService {
       }
     }
 
-    photos.sort((a, b) => (b.takenAt ?? DateTime(0)).compareTo(a.takenAt ?? DateTime(0)));
+    final allPhotos = [...cachedPhotos, ...newPhotos]
+      ..sort((a, b) => (b.takenAt ?? DateTime(0)).compareTo(a.takenAt ?? DateTime(0)));
+
+    if (cache != null && newPhotos.isNotEmpty) {
+      await cache.save(photos: allPhotos, timestamp: DateTime.now());
+    }
 
     return GalleryScanResult(
-      totalPhotos: count,
+      totalPhotos: allPhotos.length,
       geotaggedCount: geotagged,
       matchedPlacesCount: 0,
-      photos: photos,
+      photos: allPhotos,
     );
   }
 

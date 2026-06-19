@@ -36,6 +36,24 @@ class GeoTaggedPhoto {
   String? get coordinatesLabel => hasLocation
       ? 'Lat ${latitude!.toStringAsFixed(6)}, Long ${longitude!.toStringAsFixed(6)}'
       : null;
+
+  Map<String, dynamic> toJson() => {
+        'assetId': assetId,
+        'latitude': latitude,
+        'longitude': longitude,
+        'takenAt': takenAt?.toIso8601String(),
+        'earnedScore': earnedScore,
+        'locationType': locationType,
+      };
+
+  factory GeoTaggedPhoto.fromJson(Map<String, dynamic> json) => GeoTaggedPhoto(
+        assetId: json['assetId'] as String,
+        latitude: (json['latitude'] as num?)?.toDouble(),
+        longitude: (json['longitude'] as num?)?.toDouble(),
+        takenAt: json['takenAt'] != null ? DateTime.parse(json['takenAt'] as String) : null,
+        earnedScore: json['earnedScore'] as int?,
+        locationType: json['locationType'] as String?,
+      );
 }
 
 class GalleryScanResult {
